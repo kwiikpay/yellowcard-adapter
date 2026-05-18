@@ -38,8 +38,18 @@ export const DEFAULT_API_SECRET_CANDIDATES = [
 ];
 /**
  * Default env var names checked, in order, for the YC webhook secret.
- * Separate from the API secret because YC issues distinct secrets for
- * the request-signing direction vs the webhook-verification direction.
+ *
+ * v0.4.0 correction: per YC docs at
+ * https://docs.yellowcard.engineering/docs/webhooks, the webhook
+ * signature uses "the secretkey of the apiKey the initial request was
+ * made with" — i.e. the SAME apiSecret as outbound signing, NOT a
+ * separate dedicated webhook secret.
+ *
+ * These dedicated `YELLOWCARD_WEBHOOK_SECRET*` candidates remain for
+ * forward-compatibility in case YC's dashboard exposes a separate
+ * webhook signing key per app, but `getYellowcardWebhookSecret()` now
+ * falls back to the apiSecret when no dedicated webhook secret is set.
+ * This matches YC's documented contract for the common single-key case.
  */
 export const DEFAULT_WEBHOOK_SECRET_CANDIDATES = [
     "YELLOWCARD_WEBHOOK_SECRET",
@@ -108,10 +118,24 @@ export function getYellowcardCredentials(options) {
 }
 /**
  * Resolve the YC webhook signing secret from the environment.
- * Returns `null` if no candidate is set.
+ *
+ * Per YC docs, the webhook signature uses the SAME apiSecret as
+ * outbound signing. v0.4.0 behavior:
+ *   1. Check the dedicated `YELLOWCARD_WEBHOOK_SECRET*` candidates first
+ *      (forward-compat — in case YC ever issues a separate webhook key)
+ *   2. Fall back to the apiSecret from {@link getYellowcardCredentials}
+ *      if no dedicated webhook secret is set
+ *
+ * Returns `null` only if BOTH the webhook-secret candidates AND the
+ * apiSecret candidates are unset.
  */
 export function getYellowcardWebhookSecret(candidates = DEFAULT_WEBHOOK_SECRET_CANDIDATES) {
-    return pickEnvCandidate(candidates).value;
+    const dedicated = pickEnvCandidate(candidates).value;
+    if (dedicated)
+        return dedicated;
+    // Fall back to apiSecret per YC docs
+    const creds = getYellowcardCredentials();
+    return creds.apiSecret;
 }
 // ─── Base URL ────────────────────────────────────────────────────────
 import { YC_PRODUCTION_URL, YC_SANDBOX_URL } from "./constants.js";

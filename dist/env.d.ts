@@ -27,8 +27,18 @@ export declare const DEFAULT_API_KEY_CANDIDATES: readonly ["YELLOWCARD_API_KEY",
 export declare const DEFAULT_API_SECRET_CANDIDATES: readonly ["YELLOWCARD_API_SECRET", "YELLOWCARD_API_SECRET_SBX", "YELLOWCARD_API_SECRET_PROD", "YC_API_SECRET"];
 /**
  * Default env var names checked, in order, for the YC webhook secret.
- * Separate from the API secret because YC issues distinct secrets for
- * the request-signing direction vs the webhook-verification direction.
+ *
+ * v0.4.0 correction: per YC docs at
+ * https://docs.yellowcard.engineering/docs/webhooks, the webhook
+ * signature uses "the secretkey of the apiKey the initial request was
+ * made with" — i.e. the SAME apiSecret as outbound signing, NOT a
+ * separate dedicated webhook secret.
+ *
+ * These dedicated `YELLOWCARD_WEBHOOK_SECRET*` candidates remain for
+ * forward-compatibility in case YC's dashboard exposes a separate
+ * webhook signing key per app, but `getYellowcardWebhookSecret()` now
+ * falls back to the apiSecret when no dedicated webhook secret is set.
+ * This matches YC's documented contract for the common single-key case.
  */
 export declare const DEFAULT_WEBHOOK_SECRET_CANDIDATES: readonly ["YELLOWCARD_WEBHOOK_SECRET", "YELLOWCARD_WEBHOOK_SECRET_SBX", "YELLOWCARD_WEBHOOK_SECRET_PROD", "YC_WEBHOOK_SECRET"];
 /**
@@ -77,7 +87,16 @@ export declare function getYellowcardCredentials(options?: {
 }): ResolvedYellowcardCredentials;
 /**
  * Resolve the YC webhook signing secret from the environment.
- * Returns `null` if no candidate is set.
+ *
+ * Per YC docs, the webhook signature uses the SAME apiSecret as
+ * outbound signing. v0.4.0 behavior:
+ *   1. Check the dedicated `YELLOWCARD_WEBHOOK_SECRET*` candidates first
+ *      (forward-compat — in case YC ever issues a separate webhook key)
+ *   2. Fall back to the apiSecret from {@link getYellowcardCredentials}
+ *      if no dedicated webhook secret is set
+ *
+ * Returns `null` only if BOTH the webhook-secret candidates AND the
+ * apiSecret candidates are unset.
  */
 export declare function getYellowcardWebhookSecret(candidates?: readonly string[]): string | null;
 /**

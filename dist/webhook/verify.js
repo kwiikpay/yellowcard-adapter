@@ -1,30 +1,31 @@
 /**
  * Yellowcard webhook signature verification.
  *
- * v0.2.0: real implementation, ported from
- * `kwiikpay-dashboard/supabase/functions/_shared/yellowcard-helpers.ts`
- * (translated from `node:crypto` to `crypto.subtle` for portability).
+ * Per YC docs at https://docs.yellowcard.engineering/docs/webhooks:
  *
- * YC's webhook deliveries carry the same YcHmacV1 scheme as outbound
- * requests:
+ *   Header:
+ *     X-YC-Signature: <base64(HMAC-SHA256(rawRequestBody, secretKey))>
  *
- *   Headers:
- *     X-YC-Timestamp:  <ISO8601 timestamp>
- *     Authorization:   YcHmacV1 <apiKey>:<base64(HMAC-SHA256(canonical, webhookSecret))>
+ *   Canonical signed input: the raw request body bytes.
+ *   No timestamp, no path, no method in the canonical.
  *
- *   Canonical (no separators):
- *     <timestamp><path><METHOD><base64(sha256(rawBody))>
+ *   Secret: "the secretkey of the apiKey the initial request was made
+ *   with" — i.e. the same `apiSecret` used for outbound signing, NOT a
+ *   separate dedicated webhook secret. The apiKey is included in the
+ *   webhook payload for multi-tenant routing.
  *
- * Replay protection: reject if the timestamp drifts more than the
- * configured window (default 5 minutes) from now.
+ * v0.4.0 (2026-05-18): completely rewritten.
+ *   Previous v0.2.x / v0.3.0 verifier applied the OUTBOUND YcHmacV1
+ *   scheme (Authorization header + X-YC-Timestamp + canonical with
+ *   path/method) to webhooks. That was assumption-based; YC's actual
+ *   webhook scheme is much simpler. The old scheme would have rejected
+ *   every real YC webhook with `signature_mismatch`.
  *
- * NOTE: YC's webhook signing scheme isn't 100% documented; this is the
- * outbound scheme applied to inbound. If YC support eventually
- * confirms a different canonical, swap the implementation here — the
- * public signature stays identical.
+ * Defence-in-depth: YC says webhooks come from a static IP in prod.
+ * Caller should also IP-allowlist at the edge. Signature verify is
+ * the cryptographic gate; IP allowlist is the network gate.
  */
-import { buildMessage, hmacSign, maybeStripBusinessPrefix } from "../client.js";
-const AUTH_HEADER_RE = /^YcHmacV1\s+([^:]+):(.+)$/;
+import { hmacSign } from "../client.js";
 /**
  * Verify a YC webhook signature.
  *
@@ -34,77 +35,54 @@ const AUTH_HEADER_RE = /^YcHmacV1\s+([^:]+):(.+)$/;
  * throws on truly unexpected runtime errors.
  *
  * @example
+ *   const sig = req.headers.get("X-YC-Signature") ?? "";
+ *   const rawBody = await req.text();
  *   const result = await verifyYcWebhookSignature({
- *     rawBody: await req.text(),
- *     authorizationHeader: req.headers.get("Authorization") ?? "",
- *     timestamp: req.headers.get("X-YC-Timestamp") ?? "",
- *     webhookSecret: Deno.env.get("YELLOWCARD_WEBHOOK_SECRET")!,
- *     path: "/business/webhook",
+ *     rawBody,
+ *     signatureHeader: sig,
+ *     webhookSecret: Deno.env.get("YELLOWCARD_API_SECRET")!,
  *   });
  *   if (!result.ok) {
  *     console.warn("[yc-webhook] signature_ok=false", result);
- *     // Apply compensating controls (idempotency, structure validation)
+ *     // Apply compensating controls (idempotency, structure validation,
+ *     // optionally ALLOW_UNSIGNED env var while debugging)
  *   }
  */
 export async function verifyYcWebhookSignature(opts) {
-    if (!opts.authorizationHeader || !opts.timestamp) {
-        return {
-            ok: false,
-            reason: "missing_headers",
-            detail: {
-                hasAuth: Boolean(opts.authorizationHeader),
-                hasTimestamp: Boolean(opts.timestamp),
-            },
-        };
+    if (!opts.signatureHeader) {
+        return { ok: false, reason: "missing_header" };
     }
-    const match = AUTH_HEADER_RE.exec(opts.authorizationHeader.trim());
-    if (!match) {
-        return {
-            ok: false,
-            reason: "malformed_authorization",
-            detail: { authHeader: opts.authorizationHeader.slice(0, 60) },
-        };
+    if (!opts.webhookSecret) {
+        return { ok: false, reason: "missing_secret" };
     }
-    const [, apiKey, signature] = match;
-    // Replay window check
-    const skewSec = opts.allowSkewSec ?? 300;
-    const tsMs = Date.parse(opts.timestamp);
-    if (!Number.isFinite(tsMs)) {
-        return {
-            ok: false,
-            reason: "malformed_timestamp",
-            detail: { timestamp: opts.timestamp },
-        };
+    if (opts.rawBody === undefined || opts.rawBody === null) {
+        return { ok: false, reason: "missing_body" };
     }
-    const driftMs = Math.abs(Date.now() - tsMs);
-    if (driftMs > skewSec * 1000) {
-        return {
-            ok: false,
-            reason: "timestamp_drift",
-            detail: { driftMs, allowSec: skewSec },
-        };
-    }
-    // Recompute canonical
-    const path = opts.path ?? "/webhook";
-    const method = opts.method ?? "POST";
-    const canonicalPath = maybeStripBusinessPrefix(path, opts.stripBusinessPrefix ?? false);
-    const canonical = await buildMessage(opts.timestamp, canonicalPath, method, opts.rawBody);
-    const expected = await hmacSign(opts.webhookSecret, canonical);
-    // Constant-time compare via byte-array equality
+    // Canonical signed input: the raw body, exactly as YC sent it.
+    // Re-serialising via JSON.stringify(JSON.parse(rawBody)) would change
+    // whitespace / key order and break verification. Use the bytes you got.
+    const expected = await hmacSign(opts.webhookSecret, opts.rawBody);
     const expBytes = new TextEncoder().encode(expected);
-    const sigBytes = new TextEncoder().encode(signature);
+    const sigBytes = new TextEncoder().encode(opts.signatureHeader.trim());
     if (expBytes.length !== sigBytes.length) {
         return {
             ok: false,
             reason: "signature_length_mismatch",
-            detail: { apiKey: apiKey.slice(0, 6) + "…" },
+            detail: {
+                expectedLen: expBytes.length,
+                receivedLen: sigBytes.length,
+            },
         };
     }
     if (!timingSafeBytesEqual(expBytes, sigBytes)) {
         return {
             ok: false,
             reason: "signature_mismatch",
-            detail: { apiKey: apiKey.slice(0, 6) + "…" },
+            detail: {
+                // expose first 8 chars of received sig for forensic log without
+                // leaking the full signature — keeps logs grep-friendly
+                receivedPrefix: opts.signatureHeader.slice(0, 8) + "…",
+            },
         };
     }
     return { ok: true };
@@ -115,7 +93,7 @@ export async function verifyYcWebhookSignature(opts) {
  * Iterates the full length even after the first mismatch to prevent
  * timing attacks against signature comparison. Mirrors Node's
  * `crypto.timingSafeEqual` but works without the Node dep so the
- * package stays portable.
+ * package stays portable across Deno / Node 18+ / browsers.
  */
 function timingSafeBytesEqual(a, b) {
     if (a.length !== b.length)

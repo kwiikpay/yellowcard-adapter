@@ -7,6 +7,80 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-05-18
+
+### Fixed — webhook signature verification brought into compliance with YC docs
+
+This release rewrites the webhook verifier to match YC's actual
+documented webhook signing scheme. v0.2.x / v0.3.0 incorrectly applied
+the OUTBOUND `YcHmacV1` scheme to inbound webhooks, which would have
+rejected every real YC webhook delivery with `signature_mismatch`.
+
+#### Bug: outbound scheme applied to inbound
+
+v0.2.x / v0.3.0 webhook verifier:
+- Read `Authorization` header (`YcHmacV1 <apiKey>:<sig>`)
+- Read `X-YC-Timestamp` header + did ±5min drift check
+- Recomputed canonical via `buildMessage(timestamp, path, method, body)`
+- Compared signatures
+
+Per YC docs at https://docs.yellowcard.engineering/docs/webhooks, the
+actual webhook scheme is:
+- Read `X-YC-Signature` header (single base64 value)
+- Compute `expected = base64(HMAC-SHA256(rawBody, apiSecret))` — body
+  only, no timestamp, no path, no method
+- Compare constant-time
+- **Same secret as outbound** ("the secretkey of the apiKey the initial
+  request was made with"). Not a separate dedicated webhook secret.
+
+#### Changes
+
+- **`src/webhook/verify.ts`** rewritten:
+  - New API: `{ rawBody, signatureHeader, webhookSecret }` —
+    previous `authorizationHeader`, `timestamp`, `path`, `method`,
+    `stripBusinessPrefix`, `allowSkewSec` fields are removed
+  - New reasons: `missing_header`, `missing_secret`, `missing_body`,
+    `signature_length_mismatch`, `signature_mismatch`
+  - Trims whitespace around the signature header value (defensive)
+  - Constant-time compare retained
+- **`src/env.ts`**: `getYellowcardWebhookSecret()` now falls back to
+  the apiSecret when no dedicated `YELLOWCARD_WEBHOOK_SECRET*` is set,
+  matching YC's documented contract. The dedicated env-var slots
+  remain for forward-compat.
+- **`test/webhook/verify.test.ts`** rewritten with 11 tests covering:
+  happy path (3 event types) + 4 empty/missing-input rejections +
+  wrong secret + modified body + truncated signature + whitespace
+  tolerance + byte-exact rawBody requirement.
+- **`test/env.test.ts`** updated to assert the apiSecret-fallback
+  behaviour.
+
+### Breaking change
+
+`verifyYcWebhookSignature` options shape changed (see above).
+Consumers must update header reading: stop reading `Authorization` +
+`X-YC-Timestamp`, start reading `X-YC-Signature`. The `path`,
+`method`, `stripBusinessPrefix`, and `allowSkewSec` fields no longer
+exist in the API.
+
+### Migration
+
+Consumers bump their import URL from `v0.3.0/dist/index.js` to
+`v0.4.0/dist/index.js` AND update their webhook receiver EF to:
+- Read `req.headers.get("X-YC-Signature")` instead of `Authorization`
+- Drop `X-YC-Timestamp` header reading
+- Pass `{ rawBody, signatureHeader, webhookSecret }` to verify
+
+A simple two-line change at most call sites.
+
+### Verified
+
+- 120 tests passing (11 new webhook tests + 14 client tests + 95
+  unchanged)
+- Sandbox smoke verification deferred to consumer side once webhook
+  URL is registered with YC (no sandbox webhook traffic available
+  until registration is complete; verifier is unit-test-verified to
+  produce the exact canonical YC docs specify).
+
 ## [0.3.0] — 2026-05-18
 
 ### Fixed — HMAC canonical signing brought into compliance with YC docs

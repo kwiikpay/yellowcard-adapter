@@ -129,16 +129,25 @@ describe("getYellowcardCredentials", () => {
 // ── getYellowcardWebhookSecret ──────────────────────────────────────
 
 describe("getYellowcardWebhookSecret", () => {
-  it("resolves from default candidates", () => {
+  it("resolves from dedicated webhook-secret candidates first", () => {
     process.env.YELLOWCARD_WEBHOOK_SECRET = "wh-secret";
+    process.env.YELLOWCARD_API_SECRET = "api-secret"; // dedicated should win
     expect(getYellowcardWebhookSecret()).toBe("wh-secret");
   });
 
-  it("returns null when unset", () => {
+  it("falls back to apiSecret when dedicated webhook secret is unset (v0.4.0)", () => {
+    // Per YC docs, webhook signing uses the SAME apiSecret. The dedicated
+    // YELLOWCARD_WEBHOOK_SECRET* slots are forward-compat for future YC
+    // changes; the documented default is apiSecret reuse.
+    process.env.YELLOWCARD_API_SECRET = "api-secret";
+    expect(getYellowcardWebhookSecret()).toBe("api-secret");
+  });
+
+  it("returns null only when BOTH dedicated AND apiSecret are unset", () => {
     expect(getYellowcardWebhookSecret()).toBeNull();
   });
 
-  it("accepts a custom candidate list", () => {
+  it("accepts a custom candidate list (still falls back to apiSecret)", () => {
     process.env.CUSTOM_KEY_NAME = "abc";
     expect(getYellowcardWebhookSecret(["CUSTOM_KEY_NAME"])).toBe("abc");
   });

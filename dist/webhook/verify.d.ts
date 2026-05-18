@@ -1,66 +1,53 @@
 /**
  * Yellowcard webhook signature verification.
  *
- * v0.2.0: real implementation, ported from
- * `kwiikpay-dashboard/supabase/functions/_shared/yellowcard-helpers.ts`
- * (translated from `node:crypto` to `crypto.subtle` for portability).
+ * Per YC docs at https://docs.yellowcard.engineering/docs/webhooks:
  *
- * YC's webhook deliveries carry the same YcHmacV1 scheme as outbound
- * requests:
+ *   Header:
+ *     X-YC-Signature: <base64(HMAC-SHA256(rawRequestBody, secretKey))>
  *
- *   Headers:
- *     X-YC-Timestamp:  <ISO8601 timestamp>
- *     Authorization:   YcHmacV1 <apiKey>:<base64(HMAC-SHA256(canonical, webhookSecret))>
+ *   Canonical signed input: the raw request body bytes.
+ *   No timestamp, no path, no method in the canonical.
  *
- *   Canonical (no separators):
- *     <timestamp><path><METHOD><base64(sha256(rawBody))>
+ *   Secret: "the secretkey of the apiKey the initial request was made
+ *   with" — i.e. the same `apiSecret` used for outbound signing, NOT a
+ *   separate dedicated webhook secret. The apiKey is included in the
+ *   webhook payload for multi-tenant routing.
  *
- * Replay protection: reject if the timestamp drifts more than the
- * configured window (default 5 minutes) from now.
+ * v0.4.0 (2026-05-18): completely rewritten.
+ *   Previous v0.2.x / v0.3.0 verifier applied the OUTBOUND YcHmacV1
+ *   scheme (Authorization header + X-YC-Timestamp + canonical with
+ *   path/method) to webhooks. That was assumption-based; YC's actual
+ *   webhook scheme is much simpler. The old scheme would have rejected
+ *   every real YC webhook with `signature_mismatch`.
  *
- * NOTE: YC's webhook signing scheme isn't 100% documented; this is the
- * outbound scheme applied to inbound. If YC support eventually
- * confirms a different canonical, swap the implementation here — the
- * public signature stays identical.
+ * Defence-in-depth: YC says webhooks come from a static IP in prod.
+ * Caller should also IP-allowlist at the edge. Signature verify is
+ * the cryptographic gate; IP allowlist is the network gate.
  */
 export interface VerifyYcWebhookSignatureOptions {
     /** The exact raw request body as a string (NOT re-serialised JSON). */
     rawBody: string;
-    /** Value of the `Authorization` request header (full `YcHmacV1 ...` form). */
-    authorizationHeader: string;
-    /** Value of the `X-YC-Timestamp` request header. */
-    timestamp: string;
-    /** YC webhook signing secret (NOT the API secret — usually a separate key). */
+    /**
+     * Value of the `X-YC-Signature` request header (base64-encoded
+     * HMAC-SHA256 of the raw body).
+     */
+    signatureHeader: string;
+    /**
+     * YC API secret — same value as used for outbound signing. Per YC docs:
+     * "the secretkey of the apiKey the initial request was made with".
+     *
+     * If you maintain multiple API keys and need to route by apiKey, parse
+     * the payload first to extract the apiKey, then look up the matching
+     * secret and pass it here.
+     */
     webhookSecret: string;
-    /**
-     * The path the webhook was POSTed to (as YC sees it on their end).
-     * Defaults to `"/webhook"`. Pass the explicit deployed path if it
-     * differs (e.g. `"/business/webhook"` or a custom mount point).
-     */
-    path?: string;
-    /**
-     * HTTP method YC used. Always `POST` in practice; exposed for
-     * completeness.
-     */
-    method?: string;
-    /**
-     * Strip the leading `/business` from the path before signing.
-     * Mirror of {@link import("../client.js").maybeStripBusinessPrefix}
-     * — set this to match how outbound requests are signed in your
-     * deploy.
-     */
-    stripBusinessPrefix?: boolean;
-    /**
-     * Allowed clock skew between YC's timestamp and our `Date.now()`,
-     * in seconds. Default 300 (5 minutes).
-     */
-    allowSkewSec?: number;
 }
 export type YcWebhookVerifyResult = {
     ok: true;
 } | {
     ok: false;
-    reason: "missing_headers" | "malformed_authorization" | "malformed_timestamp" | "timestamp_drift" | "signature_length_mismatch" | "signature_mismatch";
+    reason: "missing_header" | "missing_secret" | "missing_body" | "signature_length_mismatch" | "signature_mismatch";
     detail?: Record<string, unknown>;
 };
 /**
@@ -72,16 +59,17 @@ export type YcWebhookVerifyResult = {
  * throws on truly unexpected runtime errors.
  *
  * @example
+ *   const sig = req.headers.get("X-YC-Signature") ?? "";
+ *   const rawBody = await req.text();
  *   const result = await verifyYcWebhookSignature({
- *     rawBody: await req.text(),
- *     authorizationHeader: req.headers.get("Authorization") ?? "",
- *     timestamp: req.headers.get("X-YC-Timestamp") ?? "",
- *     webhookSecret: Deno.env.get("YELLOWCARD_WEBHOOK_SECRET")!,
- *     path: "/business/webhook",
+ *     rawBody,
+ *     signatureHeader: sig,
+ *     webhookSecret: Deno.env.get("YELLOWCARD_API_SECRET")!,
  *   });
  *   if (!result.ok) {
  *     console.warn("[yc-webhook] signature_ok=false", result);
- *     // Apply compensating controls (idempotency, structure validation)
+ *     // Apply compensating controls (idempotency, structure validation,
+ *     // optionally ALLOW_UNSIGNED env var while debugging)
  *   }
  */
 export declare function verifyYcWebhookSignature(opts: VerifyYcWebhookSignatureOptions): Promise<YcWebhookVerifyResult>;
