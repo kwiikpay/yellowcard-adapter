@@ -1,0 +1,65 @@
+name: Publish to GitHub Packages
+
+# Publishes `@kwiikpay/yellowcard-adapter` to GitHub Packages on every
+# pushed tag matching `v*.*.*` (semver).
+#
+# Workflow:
+#   1. Cut a release: bump version in package.json, commit, then:
+#        git tag v1.0.0
+#        git push origin v1.0.0
+#   2. This workflow runs: install → typecheck → test → build → publish
+#   3. Consumers `npm update @kwiikpay/yellowcard-adapter` to pull the new version
+#
+# Consumers must have their own .npmrc with:
+#   @kwiikpay:registry=https://npm.pkg.github.com
+#   //npm.pkg.github.com/:_authToken=${GITHUB_TOKEN}
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://npm.pkg.github.com"
+          scope: "@kwiikpay"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run lint
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      - name: Verify tag matches package version
+        run: |
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          TAG_VERSION="${GITHUB_REF#refs/tags/v}"
+          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
+            echo "::error::Tag v$TAG_VERSION does not match package.json version $PKG_VERSION"
+            exit 1
+          fi
+          echo "Tag v$TAG_VERSION matches package version. Proceeding."
+
+      - name: Publish
+        run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
