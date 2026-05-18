@@ -7,7 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.1.0] — 2026-05-18
+## [0.1.1] — 2026-05-18
+
+### Fixed
+
+- **CI publish auth.** Removed the repo-root `.npmrc` that conflicted
+  with `setup-node`'s auto-generated registry config in the
+  `Publish to GitHub Packages` workflow. v0.1.0 was tagged but the
+  publish step 401'd because the repo `.npmrc` referenced
+  `${GITHUB_TOKEN}` while `setup-node` writes `${NODE_AUTH_TOKEN}`,
+  causing precedence collisions. Consumers should now configure their
+  own `.npmrc` per the updated README — this package no longer ships
+  one.
+
+## [0.1.0] — 2026-05-18 (tagged but unpublished due to CI auth bug — see 0.1.1)
 
 ### Added
 

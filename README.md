@@ -34,9 +34,11 @@ it, and a new YC fix is a single `npm publish` away from both products.
 The package is published to GitHub Packages (private registry under
 the `@kwiikpay` scope).
 
-### 1. Configure your project's `.npmrc`
+### 1. Configure your consuming project's `.npmrc`
 
-Create or extend `.npmrc` in the consuming project's root:
+Create or extend `.npmrc` in **your** project's root (this is a per-
+consumer concern; this repo doesn't ship its own `.npmrc` because CI
+uses `setup-node`'s built-in registry config):
 
 ```ini
 @kwiikpay:registry=https://npm.pkg.github.com
@@ -49,9 +51,11 @@ Create or extend `.npmrc` in the consuming project's root:
 
 - **Local dev**: export a personal access token (`gh auth token` works if
   the token has `read:packages`)
-- **CI**: GitHub Actions auto-injects `GITHUB_TOKEN` with `read:packages`
+- **GitHub Actions**: auto-injects `GITHUB_TOKEN` with `read:packages`
+  by default. Reference it explicitly in your job env:
+  `env: { GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} }`
 - **Supabase Edge Functions**: set `GITHUB_TOKEN` as a Supabase secret;
-  Deno reads it from env at module-resolve time via the `.npmrc` mechanism
+  Deno reads it at module-resolve time via the `.npmrc` mechanism
 
 ### 3. Install
 
