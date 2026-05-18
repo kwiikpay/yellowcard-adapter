@@ -1,6 +1,6 @@
 {
   "name": "@kwiikpay/yellowcard-adapter",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Shared adapter for Yellowcard API: HMAC signing, payload builders, webhook helpers. Consumed by website-kp (B2C) and kwiikpay-dashboard (B2B).",
   "type": "module",
   "main": "./dist/index.js",

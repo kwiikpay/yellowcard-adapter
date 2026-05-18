@@ -7,115 +7,84 @@ Shared Yellowcard API adapter for KwiikPay's two product surfaces:
 
 Both products share one Yellowcard merchant account but maintain
 separate customer bases, ledgers, KYC pipelines, and deploys. This
-package owns the YC API contract (HMAC signing, payload shapes,
-webhook parsing) so that bug fixes propagate via `npm update` instead
-of being copy-pasted between repos.
+repo owns the YC API contract (HMAC signing, payload shapes, webhook
+parsing) so that bug fixes propagate via a single tag bump instead of
+copy-paste between repos.
+
+**Distributed via direct GitHub raw URL imports — no npm registry,
+no GitHub Packages, no per-install cost.**
 
 ---
 
-## Why this exists
+## Quick start (Deno / Supabase Edge Functions)
 
-Yellowcard's API has several non-obvious quirks that took 10+ commits
-to discover and stabilise (sender-name fields, KYC-over-form preference,
-`localAmount` vs `amount`, SA-EFT `redirectUrl`, etc.). Those fixes were
-all made in the retail project's source. Without a shared package, every
-fix would need to be manually re-applied to the business project — and
-Bolt's AI has shown a pattern of silently reverting fixes when it
-"tidies" adjacent code (see `kwiikpay/website-kp:thor/handoff/99-troubleshooting.md`).
-
-By moving the YC payload-construction and webhook-parsing logic into
-this package, the source lives in `node_modules` where Bolt cannot reach
-it, and a new YC fix is a single `npm publish` away from both products.
-
----
-
-## Install
-
-The package is published to GitHub Packages (private registry under
-the `@kwiikpay` scope).
-
-### 1. Configure your consuming project's `.npmrc`
-
-Create or extend `.npmrc` in **your** project's root (this is a per-
-consumer concern; this repo doesn't ship its own `.npmrc` because CI
-uses `setup-node`'s built-in registry config):
-
-```ini
-@kwiikpay:registry=https://npm.pkg.github.com
-//npm.pkg.github.com/:_authToken=${GITHUB_TOKEN}
-```
-
-### 2. Provide a token
-
-`GITHUB_TOKEN` must have the `read:packages` scope. Options:
-
-- **Local dev**: export a personal access token (`gh auth token` works if
-  the token has `read:packages`)
-- **GitHub Actions**: auto-injects `GITHUB_TOKEN` with `read:packages`
-  by default. Reference it explicitly in your job env:
-  `env: { GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} }`
-- **Supabase Edge Functions**: set `GITHUB_TOKEN` as a Supabase secret;
-  Deno reads it at module-resolve time via the `.npmrc` mechanism
-
-### 3. Install
-
-```bash
-npm install @kwiikpay/yellowcard-adapter
-```
-
----
-
-## Quick start
-
-### From a Node / Deno consumer
+Import directly from a tagged release in `raw.githubusercontent.com`:
 
 ```ts
+// supabase/functions/yellowcard-execute-send/index.ts
 import {
   ycFetch,
+  parseYcWebhookPayload,
+  classifyYcStatus,
+  verifyYcWebhookSignature,
   buildOutboundPaymentPayload,
   normalizeKycFromUserMetadata,
   YC_SANDBOX_URL,
-} from "@kwiikpay/yellowcard-adapter";
-
-// 1. Normalise KYC from your Supabase user metadata
-const kyc = normalizeKycFromUserMetadata(user.user_metadata, user.email);
-
-// 2. Build the YC payload (this is where all the bug fixes live)
-const payload = buildOutboundPaymentPayload({
-  sequenceId: `kpb-${orderId}`, // or `kp-${orderId}` for retail
-  beneficiary: {
-    channelId: beneficiaryRow.channel_id,
-    networkId: beneficiaryRow.network_id,
-    accountName: beneficiaryRow.account_name,
-    accountNumber: beneficiaryRow.account_number,
-    bankCode: beneficiaryRow.bank_code,
-    phoneNumber: beneficiaryRow.phone_number,
-    recipientEmail: beneficiaryRow.recipient_email,
-  },
-  destinationCurrency: quote.destination_currency,
-  destinationCountry: quote.destination_country,
-  localAmount: quote.destination_amount,
-  business: { businessName: config.business_name, businessId: config.business_id },
-  customer: kyc,
-});
-
-// 3. Call YC
-const result = await ycFetch(
-  {
-    baseUrl: config.base_url ?? YC_SANDBOX_URL,
-    apiKey: Deno.env.get("YELLOWCARD_API_KEY2")!,
-    secretKey: Deno.env.get("YELLOWCARD_SECRET_KEY2")!,
-  },
-  { path: "/payments", method: "POST", body: payload },
-);
-
-if (!result.ok) {
-  // Handle failure — refund the ledger debit, etc.
-}
+} from "https://raw.githubusercontent.com/kwiikpay/yellowcard-adapter/v0.1.1/src/index.ts";
 ```
 
-A complete Supabase Edge Function reference is in
-[`examples/deno-edge-function.ts`](./examples/deno-edge-function.ts).
+**Why direct URL imports?**
+- Zero registry cost
+- Tag-pinned: each import points at an immutable commit
+- Native to Deno (the runtime for both projects' Edge Functions)
+- No `.npmrc`, no auth tokens to maintain in `node_modules`-land
+
+**Authenticating private-repo reads.** Because this repo is private,
+Deno needs a GitHub token to fetch raw URLs. Set it as a Supabase
+secret:
+
+```bash
+./supabase.exe secrets set --project-ref <ref> GITHUB_TOKEN=ghp_xxxxx
+```
+
+The token needs `repo` scope (or `read:packages` if the repo is ever
+flipped to use a registry). Deno automatically reads `GITHUB_TOKEN`
+from env for `https://raw.githubusercontent.com/...` fetches.
+
+### Upgrading versions
+
+Change the version in the URL:
+
+```ts
+// Was:
+import { ycFetch } from "https://raw.githubusercontent.com/kwiikpay/yellowcard-adapter/v0.1.1/src/index.ts";
+
+// Becomes:
+import { ycFetch } from "https://raw.githubusercontent.com/kwiikpay/yellowcard-adapter/v0.2.0/src/index.ts";
+```
+
+Each consuming EF picks its own version. Roll forward gradually,
+test in sandbox, deploy. No `npm update` step.
+
+---
+
+## Quick start (Node tooling, if you have any)
+
+For Node-based consumers (admin scripts, recon CLIs, etc.), install
+from git directly — no registry:
+
+```bash
+npm install git+https://github.com/kwiikpay/yellowcard-adapter.git#v0.1.1
+```
+
+Then import normally:
+
+```ts
+import { ycFetch } from "@kwiikpay/yellowcard-adapter";
+```
+
+`npm` clones the tag, builds locally via `npm run build`, and drops
+the compiled output in `node_modules`. No registry round-trip.
 
 ---
 
@@ -129,7 +98,7 @@ hmacSign(secretKey: string, message: string): Promise<string>           // expor
 buildMessage(date, path, method, body?): Promise<string>                 // exported for tests
 ```
 
-### Payload builders (the bug-fix surface)
+### Payload builders (Tim's 10 bug fixes embedded)
 
 ```ts
 buildOutboundPaymentPayload(opts: BuildOutboundPaymentPayloadOptions): Record<string, unknown>
@@ -163,14 +132,13 @@ YC_SANDBOX_URL    = "https://sandbox.api.yellowcard.io/business"
 
 `YcKycFields`, `YcBeneficiary`, `YcBusinessIdentity`, `YcWebhookEvent`,
 `YcStatusClass`, `YcFlow`, `YcClientConfig`, `YcRequestOptions`,
-`YcResponse`. All exported from the package root.
+`YcResponse`.
 
 ---
 
 ## Sequence-ID prefixes
 
-The package is agnostic to which prefix a consuming project uses, but
-the conventions are:
+The package is agnostic to which prefix a consuming project uses:
 
 | Project | Outbound | Inbound |
 |---|---|---|
@@ -178,81 +146,46 @@ the conventions are:
 | `kwiikpay-dashboard` (business) | `kpb-{uuid}` | `kpb-in-{uuid}` |
 
 The `-in-` segment is what `parseYcWebhookPayload` uses to derive
-`kind: "inbound" | "outbound"`. Use any prefix you like; preserve the
-`-in-` convention for inbound flows.
+`kind: "inbound" | "outbound"`.
 
 ---
 
 ## Webhook signature verification
 
-`verifyYcWebhookSignature` is a **placeholder** in v0.1.x. YC's
-canonical message-format for HMAC signing is not yet documented; Tim has
-an open question with YC support to confirm the exact scheme.
+`verifyYcWebhookSignature` is a **placeholder** in v0.1.x. The
+`kwiikpay-dashboard` project has a working implementation in
+`supabase/functions/_shared/yellowcard-helpers.ts`
+(HMAC-SHA256, 5-min replay window, timing-safe compare) that should
+be ported into this package in v0.2.0.
 
-Until that's resolved, consumers should adopt the compensating-controls
-posture documented in `kwiikpay-dashboard`'s `CLAUDE.md` under
-*"Known security gap: Hercle webhook signature verification"*:
+Until then, consumers using `verifyYcWebhookSignature` directly from
+this package should adopt the compensating-controls posture
+documented in `kwiikpay-dashboard`'s `CLAUDE.md` under *"Known
+security gap: Hercle webhook signature verification"*:
 
 1. **Idempotency** — unique constraint on `yellowcard_webhook_events.yc_event_id`
-   so duplicate / replayed deliveries are no-ops
-2. **Defensive handler structure** — structure-validate every webhook
-   field before any DB write or downstream EF dispatch
-3. **Always log `signature_ok: false`** — operational visibility into
-   the verification gap
-4. **Capture `raw_body_text`** — exact-bytes audit trail for any
-   future signature investigation
+2. **Defensive handler structure** — structure-validate every field
+   before any DB write
+3. **Always log `signature_ok: false`** — operational visibility
+4. **Capture `raw_body_text`** — exact-bytes audit trail
 
-When YC documents the scheme, the implementation will be replaced
-behind the same `verifyYcWebhookSignature` signature. Consumers see no
-API break.
+When v0.2.0 ports the dashboard's real implementation in, consumers
+just bump the URL version and the function starts returning real
+verifications.
 
 ---
 
 ## Cutting a release
 
-Releases are tag-driven via GitHub Actions:
+1. Make the changes on `main`
+2. Bump `version` in `package.json` + add a section to `CHANGELOG.md`
+3. Commit
+4. Tag the release: `git tag -a v0.2.0 -m "v0.2.0 — <what>"`
+5. Push: `git push origin main v0.2.0`
 
-```bash
-# 1. Bump version
-npm version patch    # or minor / major
-# (npm version commits the bump and creates a v<version> tag)
-
-# 2. Push commit + tag
-git push origin main --follow-tags
-```
-
-The `Publish to GitHub Packages` workflow then:
-
-1. Installs deps (`npm ci`)
-2. Typechecks (`tsc --noEmit`)
-3. Runs tests (`vitest run`)
-4. Builds (`tsc`)
-5. Verifies the tag matches `package.json` version
-6. Publishes to GitHub Packages
-
-Consumers then `npm update @kwiikpay/yellowcard-adapter` to pull the
-new version.
-
----
-
-## Migration guide (for existing YC EF code)
-
-Projects with inline YC payload-construction code (currently:
-`website-kp`, soon: any new project) can adopt the package by:
-
-1. `npm install @kwiikpay/yellowcard-adapter` + configure `.npmrc`
-2. Delete the inline `hmacSign` / `buildMessage` / `ycFetch` block
-   (~80 lines per EF)
-3. Replace the inline `paymentPayload` / `collectionPayload`
-   object-literal with a call to `buildOutboundPaymentPayload(...)` /
-   `buildInboundCollectionPayload(...)`
-4. Replace the webhook EF's inline status-classification logic with
-   `classifyYcStatus(ycStatus, flow)`
-5. Replace the webhook payload-extraction with `parseYcWebhookPayload(raw)`
-
-A reference EF using the package (showing the resulting ~80-line shape
-for `yellowcard-outbound-create`) is in
-[`examples/deno-edge-function.ts`](./examples/deno-edge-function.ts).
+That's it. There's no registry to publish to. CI runs typecheck +
+tests on every push to confirm the tagged commit is sound; consumers
+then bump their import URLs from `v0.1.1` to `v0.2.0`.
 
 ---
 
@@ -262,11 +195,11 @@ for `yellowcard-outbound-create`) is in
 npm install
 npm test          # vitest run
 npm run lint      # tsc --noEmit
-npm run build     # tsc → dist/
+npm run build     # tsc → dist/ (sanity check; consumers don't need this)
 ```
 
-Tests live in `test/`. The build emits ESM to `dist/` with `.d.ts`
-type declarations and source maps.
+Tests live in `test/`. The `dist/` folder is not committed — Deno
+consumers import `.ts` source directly via raw URL.
 
 ---
 

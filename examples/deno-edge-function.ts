@@ -1,39 +1,25 @@
 /**
- * Reference: a Supabase Edge Function that uses
- * @kwiikpay/yellowcard-adapter for the outbound (send-money) flow.
+ * Reference: a Supabase Edge Function that imports the YC adapter
+ * directly from a tagged GitHub raw URL — no npm, no registry.
  *
- * Compare against `kwiikpay/website-kp:thor/supabase/functions/
- * yellowcard-outbound-create/index.ts` (which has the YC API logic
- * inlined). This version is ~80 lines shorter because the YC-specific
- * code (HMAC sign + payload construction) lives in the package.
+ * Pin the version in the import URL (`v0.1.1` below). To upgrade,
+ * change the version in the URL and redeploy.
  *
- * What stays in the EF:
- *   - Supabase auth + JWT verification
- *   - Ledger debit/credit RPCs
- *   - Order-row insert + status_history append
- *   - Auto-refund policy on YC rejection
- *   - Failure handling & response shape
- *
- * What's in the package:
- *   - HMAC signing + ycFetch
- *   - The bug-fix-laden payload construction
- *   - KYC normalisation
- *
- * Bolt cannot touch the package (it lives in node_modules), so the
- * 10 historical bug fixes are safe from auto-reverts. The EF itself
- * is still subject to Bolt edits, but the surface that Bolt could
- * regress is small and clearly bounded.
+ * This pattern is what both `kwiikpay/website-kp` and
+ * `kwiikpay/kwiikpay-dashboard` should use to consume this package.
  */
 
 // @ts-ignore — Deno-specific imports
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
+
+// ── The shared YC adapter — pinned to a tag ─────────────────────────
 import {
   ycFetch,
   buildOutboundPaymentPayload,
   normalizeKycFromUserMetadata,
   YC_SANDBOX_URL,
-} from "npm:@kwiikpay/yellowcard-adapter@^0.1.0";
+} from "https://raw.githubusercontent.com/kwiikpay/yellowcard-adapter/v0.1.1/src/index.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -63,10 +49,7 @@ Deno.serve(async (req: Request) => {
     const authHeader = req.headers.get("Authorization");
     if (!authHeader) return json({ error: "Missing authorization" }, 401);
     const userRes = await fetch(`${supabaseUrl}/auth/v1/user`, {
-      headers: {
-        Authorization: authHeader,
-        apikey: serviceRoleKey,
-      },
+      headers: { Authorization: authHeader, apikey: serviceRoleKey },
     });
     if (!userRes.ok) return json({ error: "Unauthorized" }, 401);
     const user = await userRes.json();
@@ -158,51 +141,36 @@ Deno.serve(async (req: Request) => {
     const result = await ycFetch(
       {
         baseUrl: config?.base_url ?? YC_SANDBOX_URL,
-        apiKey: Deno.env.get("YELLOWCARD_API_KEY2")!.trim(),
-        secretKey: Deno.env.get("YELLOWCARD_SECRET_KEY2")!.trim(),
+        apiKey: Deno.env.get("YELLOWCARD_API_KEY")!.trim(),
+        secretKey: Deno.env.get("YELLOWCARD_API_SECRET")!.trim(),
       },
       { path: "/payments", method: "POST", body: payload },
     );
 
-    // ── Handle result ──────────────────────────────────────────────
     if (!result.ok) {
-      // Auto-refund the debit since YC rejected the payment
-      const { data: feeSettings } = await sb
-        .from("yellowcard_fee_settings")
-        .select("auto_refund_on_failure")
-        .eq("id", 1)
-        .maybeSingle();
-      const autoRefund = feeSettings?.auto_refund_on_failure ?? true;
-
-      if (autoRefund) {
-        await sb.rpc("credit_user_asset", {
-          p_user_id: user.id,
-          p_currency: "USDT",
-          p_amount: quote.source_amount,
-          p_reason: "yellowcard_refund",
-          p_ref_type: "yellowcard_outbound_order",
-          p_ref_id: orderId,
-          p_memo: `Auto-refund: YC rejected (${result.status})`,
-        });
-      }
-
+      await sb.rpc("credit_user_asset", {
+        p_user_id: user.id,
+        p_currency: "USDT",
+        p_amount: quote.source_amount,
+        p_reason: "yellowcard_refund",
+        p_ref_type: "yellowcard_outbound_order",
+        p_ref_id: orderId,
+        p_memo: `Auto-refund: YC rejected (${result.status})`,
+      });
       const errText = typeof (result.data as { message?: string })?.message === "string"
         ? (result.data as { message: string }).message
         : JSON.stringify(result.data).slice(0, 500);
-
       await sb.from("yellowcard_outbound_orders").update({
-        status: autoRefund ? "refunded" : "failed",
+        status: "refunded",
         failure_reason: `YC ${result.status}: ${errText}`,
         yc_last_response: result.data,
       }).eq("id", orderId);
-
       return json({
-        error: `Yellow Card rejected the payment: ${errText}`,
+        error: `Yellow Card rejected: ${errText}`,
         order_id: orderId,
       }, 400);
     }
 
-    // ── Success: record YC IDs ─────────────────────────────────────
     const ycData = result.data as Record<string, unknown>;
     const ycOrderId = String(ycData.id ?? ycData.paymentId ?? "");
     const ycStatus = String(ycData.status ?? "");

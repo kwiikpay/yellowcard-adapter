@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.2] — 2026-05-18
+
+### Changed
+
+- **Distribution model: removed GitHub Packages publish.** Both
+  consumers are Deno (Supabase Edge Functions); Deno can import
+  directly from `https://raw.githubusercontent.com/kwiikpay/yellowcard-adapter/<tag>/src/index.ts`
+  with a `GITHUB_TOKEN` for private-repo auth. No registry, no
+  per-package cost. Consumers pin to a tag in the import URL.
+- **Deleted `.github/workflows/publish.yml`** — no longer needed.
+- **Deleted repo `.npmrc`** (already done in v0.1.1; this just
+  finalises the no-registry posture).
+- **README rewritten** to show the Deno raw-URL import pattern as the
+  canonical consumption method; `npm install git+...` retained as a
+  fallback for any Node tooling.
+- **`examples/deno-edge-function.ts` updated** to use the raw-URL
+  import.
+
+### Not changed
+
+- All API surface unchanged. Existing imports still resolve.
+- `package.json` retained for `npm test` / `npm run build` /
+  `npm run lint` tooling, but the `publishConfig` block is now
+  vestigial (no `npm publish` from this repo).
+
 ## [0.1.1] — 2026-05-18
 
 ### Fixed
