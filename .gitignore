@@ -80,7 +80,11 @@ out
 
 # Nuxt.js build / generate output
 .nuxt
-dist
+# dist intentionally NOT ignored — Deno consumers import compiled .js
+# from https://raw.githubusercontent.com/.../v<tag>/dist/index.js
+# because Supabase EF bundler can't resolve `.js` import extensions
+# against `.ts` source files (TypeScript NodeNext convention requires
+# `.js` extensions in source imports; those only resolve in dist/).
 .output
 
 # Gatsby files

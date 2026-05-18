@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] — 2026-05-18
+
+### Fixed
+
+- **Deno deploy bundler compatibility.** Supabase's EF deploy bundler
+  doesn't resolve `.js` import extensions against `.ts` source files
+  the way Deno's runtime does. Source files use `import "./types.js"`
+  (TypeScript NodeNext convention) which fails at deploy time when
+  bundling raw `src/*.ts` from GitHub. The Supabase deployer follows
+  the literal URL `https://raw.../v0.2.0/src/types.js` and 404s.
+- **Fix**: commit `dist/` (compiled `.js` output) to the repo so
+  consumers import from `dist/index.js` where the `.js` files exist
+  alongside their `.d.ts` declarations.
+- **Migration**: change consumer import URLs from
+  `.../v0.2.0/src/index.ts` to `.../v0.2.1/dist/index.js`. No code
+  changes in consumers beyond the URL bump.
+
+### Changed
+
+- `.gitignore` updated: `dist/` is now tracked (was ignored).
+  Comments inline explain why.
+
 ## [0.2.0] — 2026-05-18
 
 ### Added — transport feature parity with `kwiikpay-dashboard/_shared/yellowcard-helpers.ts`

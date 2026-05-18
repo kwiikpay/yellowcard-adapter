@@ -19,7 +19,7 @@ import {
   buildOutboundPaymentPayload,
   normalizeKycFromUserMetadata,
   YC_SANDBOX_URL,
-} from "https://raw.githubusercontent.com/kwiikpay/yellowcard-adapter/v0.1.1/src/index.ts";
+} from "https://raw.githubusercontent.com/kwiikpay/yellowcard-adapter/v0.2.1/dist/index.js";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",

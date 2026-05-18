@@ -34,7 +34,7 @@ import {
   getYellowcardBaseUrl,
   getYellowcardRelaySecret,
   YC_SANDBOX_URL,
-} from "https://raw.githubusercontent.com/kwiikpay/yellowcard-adapter/v0.2.0/src/index.ts";
+} from "https://raw.githubusercontent.com/kwiikpay/yellowcard-adapter/v0.2.1/dist/index.js";
 ```
 
 **Why direct URL imports?**
@@ -64,7 +64,7 @@ Change the version in the URL:
 import { ycFetch } from "https://raw.githubusercontent.com/kwiikpay/yellowcard-adapter/v0.1.1/src/index.ts";
 
 // Becomes:
-import { ycFetch } from "https://raw.githubusercontent.com/kwiikpay/yellowcard-adapter/v0.2.0/src/index.ts";
+import { ycFetch } from "https://raw.githubusercontent.com/kwiikpay/yellowcard-adapter/v0.2.1/dist/index.js";
 ```
 
 Each consuming EF picks its own version. Roll forward gradually,
@@ -170,7 +170,7 @@ from `kwiikpay-dashboard/_shared/yellowcard-helpers.ts`):
 Example:
 
 ```ts
-import { verifyYcWebhookSignature } from "https://raw.githubusercontent.com/kwiikpay/yellowcard-adapter/v0.2.0/src/index.ts";
+import { verifyYcWebhookSignature } from "https://raw.githubusercontent.com/kwiikpay/yellowcard-adapter/v0.2.1/dist/index.js";
 
 const rawBody = await req.text();
 const result = await verifyYcWebhookSignature({
