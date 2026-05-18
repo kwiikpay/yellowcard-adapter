@@ -7,6 +7,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-05-18
+
+### Fixed — HMAC canonical signing brought into compliance with YC docs
+
+This release fixes two latent signing bugs in the canonical-string
+builder that produced wrong signatures for every GET/DELETE request.
+v0.2.x callers hitting YC sandbox would have received
+`401 AuthenticationError: invalid apiKey signature combination`
+on every read; the bug only escaped notice because we were also
+running against IP-allowlisted production where YC checks IP BEFORE
+signature, so all errors collapsed to `IPMismatchError` regardless of
+whether the signature was valid.
+
+#### Bug A: bodyHash appended for GET/DELETE (should be POST/PUT only)
+
+YC's docs are explicit: "For POST and PUT requests a base64 encoded
+sha256 hash of the request body" goes into the canonical. For GET,
+DELETE, HEAD, OPTIONS — no bodyHash component.
+
+v0.2.x always appended `base64(sha256(body ?? ""))` regardless of
+method, producing a 4-segment canonical when YC expected 3 segments
+for body-less methods.
+
+**v0.3.0 behavior**:
+```
+GET    /business/channels  →  <timestamp>/business/channelsGET
+POST   /business/payments  →  <timestamp>/business/paymentsPOST<base64(sha256(body))>
+PUT    /business/orders/x  →  <timestamp>/business/orders/xPUT<base64(sha256(body))>
+DELETE /business/orders/x  →  <timestamp>/business/orders/xDELETE
+```
+
+#### Bug B: ambiguity over whether canonical path includes `/business/`
+
+v0.2.x exposed `stripBusinessPrefix` as a config toggle with no
+documented default behavior — the comment in `client.ts` said the
+docs "aren't fully explicit." Sandbox verification on 2026-05-18
+confirmed: YC's canonical path **includes** the `/business/` prefix
+(matches their docs example `/business/payments/accept`).
+
+**v0.3.0 behavior**: default `stripBusinessPrefix: false` is now
+documented as canonical. Toggle retained for forward-compat
+diagnostics, but production deploys should never flip it.
+
+### Verified
+
+- New `test/client.test.ts` asserts the exact canonical strings YC
+  expects for GET / DELETE / HEAD / POST / PUT
+- Tested end-to-end against YC sandbox `https://sandbox.api.yellowcard.io/business/channels`:
+  - v0.2.x scheme: `401 AuthenticationError: invalid apiKey signature combination`
+  - v0.3.0 scheme: `200 OK` with full channel list
+
+### Migration
+
+Consumers bump their import URL from `v0.2.1/dist/index.js` to
+`v0.3.0/dist/index.js`. No API surface changes — only the canonical
+string emitted internally. Webhook verification benefits automatically
+(it calls the same `buildMessage`).
+
 ## [0.2.1] — 2026-05-18
 
 ### Fixed
