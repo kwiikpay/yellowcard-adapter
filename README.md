@@ -29,8 +29,12 @@ import {
   verifyYcWebhookSignature,
   buildOutboundPaymentPayload,
   normalizeKycFromUserMetadata,
+  getYellowcardCredentials,
+  getYellowcardWebhookSecret,
+  getYellowcardBaseUrl,
+  getYellowcardRelaySecret,
   YC_SANDBOX_URL,
-} from "https://raw.githubusercontent.com/kwiikpay/yellowcard-adapter/v0.1.1/src/index.ts";
+} from "https://raw.githubusercontent.com/kwiikpay/yellowcard-adapter/v0.2.0/src/index.ts";
 ```
 
 **Why direct URL imports?**
@@ -152,26 +156,41 @@ The `-in-` segment is what `parseYcWebhookPayload` uses to derive
 
 ## Webhook signature verification
 
-`verifyYcWebhookSignature` is a **placeholder** in v0.1.x. The
-`kwiikpay-dashboard` project has a working implementation in
-`supabase/functions/_shared/yellowcard-helpers.ts`
-(HMAC-SHA256, 5-min replay window, timing-safe compare) that should
-be ported into this package in v0.2.0.
+`verifyYcWebhookSignature` is **fully implemented in v0.2.0+** (ported
+from `kwiikpay-dashboard/_shared/yellowcard-helpers.ts`):
 
-Until then, consumers using `verifyYcWebhookSignature` directly from
-this package should adopt the compensating-controls posture
-documented in `kwiikpay-dashboard`'s `CLAUDE.md` under *"Known
-security gap: Hercle webhook signature verification"*:
+- YcHmacV1 HMAC-SHA256 verification
+- 5-minute default replay window (configurable via `allowSkewSec`)
+- Constant-time signature comparison
+- Returns `{ ok: true }` or
+  `{ ok: false, reason, detail? }` with one of
+  `missing_headers | malformed_authorization | malformed_timestamp |
+  timestamp_drift | signature_length_mismatch | signature_mismatch`
 
-1. **Idempotency** — unique constraint on `yellowcard_webhook_events.yc_event_id`
-2. **Defensive handler structure** — structure-validate every field
-   before any DB write
-3. **Always log `signature_ok: false`** — operational visibility
-4. **Capture `raw_body_text`** — exact-bytes audit trail
+Example:
 
-When v0.2.0 ports the dashboard's real implementation in, consumers
-just bump the URL version and the function starts returning real
-verifications.
+```ts
+import { verifyYcWebhookSignature } from "https://raw.githubusercontent.com/kwiikpay/yellowcard-adapter/v0.2.0/src/index.ts";
+
+const rawBody = await req.text();
+const result = await verifyYcWebhookSignature({
+  rawBody,
+  authorizationHeader: req.headers.get("Authorization") ?? "",
+  timestamp: req.headers.get("X-YC-Timestamp") ?? "",
+  webhookSecret: Deno.env.get("YELLOWCARD_WEBHOOK_SECRET")!,
+  path: "/business/webhook",
+});
+
+if (!result.ok) {
+  console.warn("[yc-webhook] signature_ok=false", result);
+  // Apply compensating controls: idempotency on yc_event_id,
+  // structure validation before any DB write, etc.
+}
+```
+
+If YC ever publishes a different canonical message format, swap the
+implementation behind `verifyYcWebhookSignature` — the public surface
+stays the same.
 
 ---
 

@@ -7,6 +7,85 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-05-18
+
+### Added — transport feature parity with `kwiikpay-dashboard/_shared/yellowcard-helpers.ts`
+
+The kwiikpay-dashboard project independently built a richer YC helpers
+module than what website-kp had. v0.2.0 ports that surface into the
+package so both projects can consume one canonical implementation:
+
+- **`src/env.ts`** — runtime-agnostic env-var resolution (Deno + Node):
+  - `readEnvVar(name)` — portable replacement for `Deno.env.get` / `process.env`
+  - `pickEnvCandidate(candidates)` — first-non-empty resolution from a candidate list
+  - `getYellowcardCredentials({ apiKeyCandidates?, apiSecretCandidates? })`
+    — returns `{ apiKey, apiSecret, apiKeyEnvVar, apiSecretEnvVar }` so
+    diagnostics can show *which* env var was hit without leaking values
+  - `getYellowcardWebhookSecret(candidates?)` — separate webhook-secret resolver
+  - `getYellowcardBaseUrl(env)` — environment-aware base URL with optional
+    `YELLOWCARD_BASE_URL` override (for Fly.io egress relay routing)
+  - `getYellowcardRelaySecret()` — reads `YELLOWCARD_RELAY_SECRET`
+  - Exported constants: `DEFAULT_API_KEY_CANDIDATES`,
+    `DEFAULT_API_SECRET_CANDIDATES`, `DEFAULT_WEBHOOK_SECRET_CANDIDATES`
+
+- **`YcClientConfig.stripBusinessPrefix`** — toggle the `/business` prefix
+  stripping in the HMAC canonical path. YC's docs example suggests this
+  is required but isn't fully explicit; the dashboard's `yellowcard-test`
+  EF toggles this to confirm per deploy. Default `false`.
+
+- **`YcClientConfig.relaySecret`** — when set, `ycFetch` attaches
+  `X-Relay-Auth: <value>` to every request for Fly.io egress-relay routing.
+
+- **`maybeStripBusinessPrefix(path, strip)`** — exported helper used by
+  both `client.ts` and `webhook/verify.ts` so request signing and
+  webhook verification share canonical-path logic.
+
+- **`sha256Base64(input)`** — exported building block (was internal in v0.1.x).
+
+### Changed — real webhook signature verification
+
+- **`verifyYcWebhookSignature(opts)`** — full HMAC-SHA256 implementation
+  ported from `kwiikpay-dashboard/_shared/yellowcard-helpers.ts`
+  (translated from `node:crypto` to `crypto.subtle` for portability):
+  - Parses `YcHmacV1 <apiKey>:<signature>` form of `Authorization` header
+  - 5-minute default replay window (configurable via `allowSkewSec`)
+  - Constant-time signature comparison (no timing leak)
+  - Returns structured `{ ok: true } | { ok: false, reason, detail? }`
+    with reasons `"missing_headers" | "malformed_authorization" |
+    "malformed_timestamp" | "timestamp_drift" |
+    "signature_length_mismatch" | "signature_mismatch"`
+  - Accepts `path`, `method`, `stripBusinessPrefix` options to match
+    however the consuming EF was deployed
+
+- **API options renamed** for clarity:
+  - `signature: string` → `authorizationHeader: string` (now expects the
+    full `YcHmacV1 ...` form, not just the signature)
+  - `secretKey` → `webhookSecret` (emphasises this is the *webhook*
+    secret, distinct from the request-signing API secret)
+
+  **Breaking** if you called `verifyYcWebhookSignature` directly in v0.1.x
+  — but in v0.1.x it was a no-op placeholder, so no consumer should
+  have a real integration to break.
+
+### Tests
+
+- **+28 new tests** (104 total, up from 76):
+  - `env.test.ts` — 18 tests for candidate resolution, base URL override,
+    relay secret, edge cases (empty strings, missing vars)
+  - `webhook/verify.test.ts` — 10 tests covering the happy path + every
+    failure-mode reason + custom skew window + stripBusinessPrefix
+    + body tampering rejection
+
+### Consumer impact
+
+After bumping to v0.2.0, `kwiikpay-dashboard` can delete most of
+`supabase/functions/_shared/yellowcard-helpers.ts` (~300 lines) and
+import the same surface from
+`https://raw.githubusercontent.com/kwiikpay/yellowcard-adapter/v0.2.0/src/index.ts`.
+
+The dashboard's `yellowcard-test` EF's `stripBusinessPrefix` toggle
+still works — the option is now on `YcClientConfig` instead of inline.
+
 ## [0.1.2] — 2026-05-18
 
 ### Changed

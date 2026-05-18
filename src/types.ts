@@ -127,6 +127,29 @@ export interface YcClientConfig {
   baseUrl: string;
   apiKey: string;
   secretKey: string;
+  /**
+   * Strip the leading `/business` from the path used in the HMAC
+   * canonical. YC's docs example suggests this is the required form
+   * but isn't fully explicit. Default: false (full path).
+   *
+   * v0.2.0: added to support the kwiikpay-dashboard yellowcard-test
+   * EF's toggle pattern (try both, pick whichever YC accepts).
+   */
+  stripBusinessPrefix?: boolean;
+  /**
+   * Optional Fly.io egress-relay shared secret. When set, the client
+   * attaches `X-Relay-Auth: <value>` to every request — the relay
+   * (Phase 1.5 infrastructure for IP-allowlisted prod traffic to YC)
+   * gates inbound on this header.
+   *
+   * Sandbox calls go direct to YC and don't need (or accept) this
+   * header — only set for production deploys routing through the
+   * relay. {@link getYellowcardRelaySecret} from `env.ts` reads the
+   * `YELLOWCARD_RELAY_SECRET` env var by default.
+   *
+   * v0.2.0: added.
+   */
+  relaySecret?: string;
 }
 
 export interface YcRequestOptions {
